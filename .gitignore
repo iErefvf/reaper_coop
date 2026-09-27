@@ -1,0 +1,21 @@
+# Rust 编译产物
+/target
+**/*.rs.bk
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编译出的插件产物（已在 target 里，但显式排除）
+*.dll
+*.dylib
+*.so
+
+# 本地日志、临时文件
+*.log
+*.tmp
