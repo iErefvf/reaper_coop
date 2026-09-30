@@ -1,5 +1,6 @@
 mod network;
 mod protocol;
+mod sync;
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -11,7 +12,15 @@ use reaper_high::{ActionKind, Reaper};
 
 use crate::network::client::join_room;
 use crate::network::discovery::{local_ip, start_broadcast, start_discovery, RoomInfo};
-use crate::network::server::{start_server, MemberTable};
+use crate::network::server::{host_submit_op, start_server, GlobalLog, MemberTable};
+use crate::sync::hook::CoopHook;
+
+extern "C" fn coop_sync_timer() {
+    let ops = crate::sync::queue::drain();
+    for op in ops {
+        crate::sync::apply::apply_op_locally(&op);
+    }
+}
 
 #[reaper_extension_plugin(
     name = "reaper_coop",
@@ -22,9 +31,22 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
     let reaper = Reaper::get();
     reaper.wake_up()?;
 
+    // ---------- 注册 hookcommand2 ----------
+    {
+        let mut session = reaper.medium_session();
+        session
+            .plugin_register_add_hook_command_2::<CoopHook>()
+            .map_err(|e| format!("注册 hookcommand2 失败: {:?}", e))?;
+        session
+            .plugin_register_add_timer(coop_sync_timer)
+            .map_err(|e| format!("注册同步定时器失败: {:?}", e))?;
+    }
+    reaper.show_console_msg("hookcommand2 已注册\n");
+    reaper.show_console_msg("同步定时器已注册\n");
+
     let broadcast_running = Arc::new(AtomicBool::new(false));
 
-    // ---------- Action 1: 创建房间（UDP 广播 + TCP Server） ----------
+    // ---------- Action 1: 创建房间 ----------
     let br = broadcast_running.clone();
     let action1 = reaper.register_action(
         "coop_create_room",
@@ -37,7 +59,6 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
             }
             br.store(true, Ordering::Relaxed);
 
-            // 启动 UDP 广播
             let info = RoomInfo {
                 room_id: "room-001".to_string(),
                 room_name: "我的房间".to_string(),
@@ -47,12 +68,20 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
             };
             start_broadcast(info, br.clone());
 
-            // 启动 TCP Server
+            let log = Arc::new(Mutex::new(GlobalLog::new()));
             let members: MemberTable = Arc::new(Mutex::new(HashMap::new()));
             let next_id = Arc::new(AtomicU64::new(1));
-            start_server(members, next_id);
 
-            Reaper::get().show_console_msg("房间已创建（UDP 广播 + TCP Server）\n");
+            start_server(members.clone(), next_id, log.clone());
+
+            // 设置房主模式的 OP_SENDER
+            let members_for_sender = members.clone();
+            let log_for_sender = log.clone();
+            crate::sync::set_op_sender(Box::new(move |op| {
+                host_submit_op(op, &members_for_sender, &log_for_sender);
+            }));
+
+            Reaper::get().show_console_msg("房间已创建\n");
         },
         ActionKind::NotToggleable,
     );
@@ -90,7 +119,6 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
     std::mem::forget(action2);
 
     // ---------- Action 3: 加入房间 ----------
-    // 保存与房主的连接，让后续操作能复用它
     let client_conn: Arc<Mutex<Option<crate::network::client::ClientConnection>>> =
         Arc::new(Mutex::new(None));
     let conn_clone = client_conn.clone();
@@ -120,13 +148,23 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
             }
 
             let name = "成员A";
-
             match join_room(&host_ip, name) {
                 Ok(conn) => {
                     Reaper::get().show_console_msg(format!(
                         "加入成功，成员 ID={}\n",
                         conn.member_id
                     ));
+
+                    // 设置成员模式的 OP_SENDER：通过 TCP 发给房主
+                    let send_stream = conn.stream.try_clone().unwrap();
+                    crate::sync::set_op_sender(Box::new(move |op| {
+                        use std::io::Write;
+                        let msg = crate::protocol::Message::OpRequest { op };
+                        let data = crate::protocol::encode_message(&msg);
+                        let mut s = send_stream.try_clone().unwrap();
+                        let _ = s.write_all(&data);
+                    }));
+
                     *conn_clone.lock().unwrap() = Some(conn);
                 }
                 Err(e) => {
@@ -156,6 +194,27 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
         ActionKind::NotToggleable,
     );
     std::mem::forget(action4);
+
+    // ---------- Action 5: 测试插入轨道（临时，验证同步链路用） ----------
+    let action5 = reaper.register_action(
+        "coop_test_add_track",
+        "协作: 测试插入轨道",
+        None,
+        || {
+            // 直接走 send_op，等价于 hook 触发后的流程
+            let op = crate::protocol::Operation {
+                id: 0,
+                seq: 0,
+                author: 0,
+                kind: crate::protocol::OpKind::TrackAdd { index: -1 },
+                undo_data: vec![],
+            };
+            crate::sync::send_op(op);
+            Reaper::get().show_console_msg("已发送测试插入轨道操作\n");
+        },
+        ActionKind::NotToggleable,
+    );
+    std::mem::forget(action5);
 
     reaper.show_console_msg("reaper_coop 初始化完成\n");
     Ok(())

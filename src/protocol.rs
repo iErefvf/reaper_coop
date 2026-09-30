@@ -43,6 +43,7 @@ pub enum Message {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Operation {
     pub id: u64,
+    pub seq: u64,
     pub author: u64,
     pub kind: OpKind,
     pub undo_data: Vec<u8>,
@@ -52,7 +53,6 @@ pub struct Operation {
 pub enum OpKind {
     TrackAdd { index: i32 },
     TrackDelete { track_guid: String },
-    // 后续逐步添加
 }
 
 #[cfg(test)]

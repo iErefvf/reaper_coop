@@ -13,15 +13,13 @@ pub const DISCOVERY_PORT: u16 = 22222;
 pub struct RoomInfo {
     pub room_id: String,
     pub room_name: String,
-    pub room_type: u8,       // 1=自由, 2=管理, 3=隔离
+    pub room_type: u8,
     pub member_count: u32,
     pub host_ip: String,
 }
 
-/// 获取本机在局域网中的 IP
 pub fn local_ip() -> String {
     let socket = UdpSocket::bind("0.0.0.0:0").expect("bind failed");
-    // UDP connect 不会真正发包，只让操作系统选择出站网卡
     let _ = socket.connect("8.8.8.8:80");
     socket
         .local_addr()
@@ -29,7 +27,6 @@ pub fn local_ip() -> String {
         .unwrap_or_else(|_| "127.0.0.1".to_string())
 }
 
-/// 房主端：周期性广播房间信息
 pub fn start_broadcast(room_info: RoomInfo, running: Arc<AtomicBool>) {
     thread::spawn(move || {
         let socket = match UdpSocket::bind("0.0.0.0:0") {
@@ -43,15 +40,14 @@ pub fn start_broadcast(room_info: RoomInfo, running: Arc<AtomicBool>) {
             crate::network::push_log("设置广播模式失败".to_string());
             return;
         }
-        //let target = SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT));
+        let broadcast_target = SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT));
+        // 单机自测用：同时往本机回环发一份
+        let local_target = SocketAddr::from((Ipv4Addr::LOCALHOST, DISCOVERY_PORT));
 
         crate::network::push_log(format!(
             "开始广播房间: {} ({})",
             room_info.room_name, room_info.host_ip
         ));
-
-        let broadcast_target = SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT));
-        let local_target = SocketAddr::from((Ipv4Addr::LOCALHOST, DISCOVERY_PORT));
 
         while running.load(Ordering::Relaxed) {
             let json = serde_json::to_string(&room_info).unwrap_or_default();
@@ -64,7 +60,6 @@ pub fn start_broadcast(room_info: RoomInfo, running: Arc<AtomicBool>) {
     });
 }
 
-/// 成员端：监听广播，收集房间列表
 pub fn start_discovery(
     rooms: Arc<Mutex<HashMap<String, RoomInfo>>>,
     running: Arc<AtomicBool>,
@@ -78,7 +73,7 @@ pub fn start_discovery(
             }
         };
         socket
-            .set_read_timeout(Some(Duration::from_secs(1)))
+            .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
 
         crate::network::push_log(format!(
