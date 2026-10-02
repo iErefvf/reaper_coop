@@ -102,6 +102,33 @@ cargo build --release
 
 4. 确认两台机器连接的是同一个主 WiFi，而不是访客网络；路由器开启“AP isolation / 客户端隔离”时，广播和 TCP 都会被阻断。
 
+#### 双机测试排查记录
+
+- 房主本机搜索到自己的房间不代表局域网发现成功。程序会额外向 `127.0.0.1:22222` 发送一份发现报文用于单机自测；另一台电脑能否收到，仍需单独验证。
+- 手机热点可能允许设备之间建立 TCP 连接，但阻止 UDP 广播。因此可能出现“搜索不到房间，但手动输入房主 IP 可以加入”。此时直接输入房主无线网卡的 IPv4 地址即可测试 TCP 加入流程。
+- 在成员电脑上测试房主 TCP 端口：
+
+  ```powershell
+  Test-NetConnection <房主IPv4> -Port 22223
+  ```
+
+  `TcpTestSucceeded : True` 表示 TCP 服务可达；`False` 通常表示防火墙、热点设备隔离或房主服务没有监听。房主电脑可以执行：
+
+  ```powershell
+  Get-NetTCPConnection -LocalPort 22223
+  ```
+
+- `ping` 使用 ICMP，可能被 Windows 或手机热点禁止。即使 `ping` 超时，只要 `Test-NetConnection` 成功，TCP 加入仍然可以正常工作。
+- 创建 Windows 防火墙规则必须使用“以管理员身份运行”的 PowerShell。需要放行 TCP `22223` 和 UDP `22222`；如果 PowerShell 报“拒绝访问”，说明当前终端没有管理员权限。
+- 两台电脑应连接同一个普通 WiFi，不能是访客网络；同时检查路由器是否开启 `AP isolation`、`Client isolation` 或“无线客户端隔离”。
+
+#### 轨道插入同步排查
+
+- 普通 REAPER Action（包括快捷键和右键菜单）需要使用 `hookcommand` 拦截。`hookcommand2` 主要用于 MIDI CC 和鼠标轮动作，不能作为普通 Action 的通用替代。
+- 成员执行轨道插入后，房主日志应出现 `房主收到 OpRequest`；如果成员本地有变化但房主没有变化，先检查插件是否已更新为使用普通 `hookcommand` 的版本。
+- 房主发起的轨道插入会先进入房主队列，再通过 TCP 广播 `OpApply`；成员发起的轨道插入则先发送 `OpRequest`，由房主分配顺序号后再广播给所有成员。
+- 重新构建插件后，必须替换两台电脑 `UserPlugins` 中的 DLL，并完全退出、重新启动 REAPER，避免仍加载旧版本。
+
 ### 2. 单机自测
 
 如果没有第二台机器，可以在同一台电脑上做自连验证：
@@ -126,7 +153,7 @@ src/
 │   └── client.rs           TCP Client、连接房主
 └── sync/
     ├── mod.rs              全局操作发送通道
-    ├── hook.rs             hookcommand2 拦截
+    ├── hook.rs             普通 Action hook 拦截
     ├── queue.rs            待应用操作队列
     └── apply.rs            本地应用操作
 ```
@@ -157,11 +184,11 @@ src/
 
 ```text
 成员端：
-  hookcommand2 / Action → send_op → TCP 发给房主
+  普通 Action hook / Action → send_op → TCP 发给房主
   房主广播 OpApply → 读线程 push 到队列 → 定时器 drain → apply_op_locally
 
 房主端：
-  hookcommand2 / Action → send_op → host_submit_op
+  普通 Action hook / Action → send_op → host_submit_op
     → 分配 id / seq → 广播 OpApply
   定时器 drain → apply_op_locally
 ```

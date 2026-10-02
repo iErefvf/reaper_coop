@@ -31,17 +31,17 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
     let reaper = Reaper::get();
     reaper.wake_up()?;
 
-    // ---------- 注册 hookcommand2 ----------
+    // ---------- 注册普通 Action hook ----------
     {
         let mut session = reaper.medium_session();
         session
-            .plugin_register_add_hook_command_2::<CoopHook>()
-            .map_err(|e| format!("注册 hookcommand2 失败: {:?}", e))?;
+            .plugin_register_add_hook_command::<CoopHook>()
+            .map_err(|e| format!("注册 hookcommand 失败: {:?}", e))?;
         session
             .plugin_register_add_timer(coop_sync_timer)
             .map_err(|e| format!("注册同步定时器失败: {:?}", e))?;
     }
-    reaper.show_console_msg("hookcommand2 已注册\n");
+    reaper.show_console_msg("hookcommand 已注册\n");
     reaper.show_console_msg("同步定时器已注册\n");
 
     let broadcast_running = Arc::new(AtomicBool::new(false));
