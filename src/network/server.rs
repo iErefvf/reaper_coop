@@ -46,17 +46,17 @@ pub fn start_server(
     members: MemberTable,
     next_id: Arc<AtomicU64>,
     log: Arc<Mutex<GlobalLog>>,
-) {
-    thread::spawn(move || {
-        let listener = match TcpListener::bind(format!("0.0.0.0:{}", CONTROL_PORT)) {
-            Ok(l) => l,
-            Err(e) => {
-                crate::network::push_log(format!("TCP Server 绑定失败: {}", e));
-                return;
-            }
-        };
-        crate::network::push_log(format!("TCP Server 已启动，端口 {}", CONTROL_PORT));
+) -> Result<(), String> {
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", CONTROL_PORT))
+        .map_err(|e| format!("TCP Server 绑定失败: {}", e))?;
 
+    crate::network::push_log(format!(
+        "TCP Server 已启动，监听 0.0.0.0:{}，房主地址 {}",
+        CONTROL_PORT,
+        crate::network::discovery::local_ip()
+    ));
+
+    thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -71,6 +71,8 @@ pub fn start_server(
             }
         }
     });
+
+    Ok(())
 }
 
 fn handle_client(
@@ -128,6 +130,8 @@ fn handle_client(
     };
     if stream.write_all(&encode_message(&accept)).is_err() {
         crate::network::push_log(format!("发送 JoinAccept 给 {} 失败", id));
+        members.lock().unwrap().remove(&id);
+        return;
     }
 
     // 广播 MemberJoin 给其他成员

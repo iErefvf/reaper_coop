@@ -57,7 +57,6 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
                 Reaper::get().show_console_msg("房间已经在广播中\n");
                 return;
             }
-            br.store(true, Ordering::Relaxed);
 
             let info = RoomInfo {
                 room_id: "room-001".to_string(),
@@ -66,13 +65,18 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
                 member_count: 1,
                 host_ip: local_ip(),
             };
-            start_broadcast(info, br.clone());
 
             let log = Arc::new(Mutex::new(GlobalLog::new()));
             let members: MemberTable = Arc::new(Mutex::new(HashMap::new()));
             let next_id = Arc::new(AtomicU64::new(1));
 
-            start_server(members.clone(), next_id, log.clone());
+            if let Err(error) = start_server(members.clone(), next_id, log.clone()) {
+                Reaper::get().show_console_msg(format!("房间创建失败: {}\n", error));
+                return;
+            }
+
+            br.store(true, Ordering::Relaxed);
+            start_broadcast(info, br.clone());
 
             // 设置房主模式的 OP_SENDER
             let members_for_sender = members.clone();
@@ -156,13 +160,34 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
                     ));
 
                     // 设置成员模式的 OP_SENDER：通过 TCP 发给房主
-                    let send_stream = conn.stream.try_clone().unwrap();
+                    let send_stream = match conn.stream.try_clone() {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            Reaper::get().show_console_msg(format!(
+                                "加入失败：复制连接失败: {}\n",
+                                error
+                            ));
+                            return;
+                        }
+                    };
                     crate::sync::set_op_sender(Box::new(move |op| {
                         use std::io::Write;
                         let msg = crate::protocol::Message::OpRequest { op };
                         let data = crate::protocol::encode_message(&msg);
-                        let mut s = send_stream.try_clone().unwrap();
-                        let _ = s.write_all(&data);
+                        match send_stream.try_clone() {
+                            Ok(mut stream) => {
+                                if let Err(error) = stream.write_all(&data) {
+                                    crate::network::push_log(format!(
+                                        "发送操作失败: {}",
+                                        error
+                                    ));
+                                }
+                            }
+                            Err(error) => crate::network::push_log(format!(
+                                "复制发送连接失败: {}",
+                                error
+                            )),
+                        }
                     }));
 
                     *conn_clone.lock().unwrap() = Some(conn);

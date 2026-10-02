@@ -89,6 +89,19 @@ cargo build --release
 6. 再反向验证一次：在 B 机上触发一次测试插入，A 机是否同步。
 7. B 机退出 REAPER 后，A 机再次查看日志，确认成员离开事件。
 
+如果 B 机搜索不到房间，或输入 IP 后出现 Windows `os error 10060`：
+
+1. 在 A 机执行 `ipconfig`，使用两台电脑共同 WiFi 网卡的 IPv4 地址，通常形如 `192.168.x.x` 或 `172.16-31.x.x`；不要使用 `127.0.0.1`、`169.254.x.x`、VMware 或 VPN 网卡地址。
+2. 在 B 机执行 `Test-NetConnection <A机IPv4> -Port 22223`。若 `TcpTestSucceeded` 为 `False`，问题在 Windows 防火墙或 WiFi 的客户端隔离，不在加入协议本身。
+3. 首次创建房间时允许 REAPER 通过 Windows 防火墙的“专用网络”。也可以由管理员执行：
+
+  ```powershell
+  New-NetFirewallRule -DisplayName "REAPER Coop TCP 22223" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22223 -Profile Private
+  New-NetFirewallRule -DisplayName "REAPER Coop UDP 22222" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 22222 -Profile Private
+  ```
+
+4. 确认两台机器连接的是同一个主 WiFi，而不是访客网络；路由器开启“AP isolation / 客户端隔离”时，广播和 TCP 都会被阻断。
+
 ### 2. 单机自测
 
 如果没有第二台机器，可以在同一台电脑上做自连验证：
