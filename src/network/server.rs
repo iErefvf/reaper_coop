@@ -7,7 +7,7 @@ use std::thread;
 
 use crate::protocol::{decode_message, encode_message, Message, Operation};
 
-pub const CONTROL_PORT: u16 = 22223;
+pub const CONTROL_PORT: u16 = 38081;
 
 pub struct Member {
     pub id: u64,
@@ -162,8 +162,10 @@ fn handle_client(
                     op_id, seq, op.kind
                 ));
 
-                // 房主自己也应用这个操作（通过队列，统一走定时器）
-                crate::sync::queue::push(op.clone());
+                // 如果成员已经执行了原生 Action，只需广播，不要在房主重复执行。
+                if !op.applied_locally {
+                    crate::sync::queue::push(op.clone());
+                }
 
                 // 广播 OpApply 给所有成员（包括发起者）
                 broadcast(&members, None, &Message::OpApply { seq, op });
@@ -181,7 +183,7 @@ fn handle_client(
     }
 }
 
-/// 房主本地发起操作：分配 id/seq，写队列，广播给所有成员
+/// 房主本地发起操作：分配 id/seq，必要时写队列，然后广播给所有成员
 pub fn host_submit_op(
     op: Operation,
     members: &MemberTable,
@@ -201,8 +203,10 @@ pub fn host_submit_op(
         op_id, seq, op.kind
     ));
 
-    // 房主自己也应用
-    crate::sync::queue::push(op.clone());
+    // 被 post-action 捕获的原生操作已经在房主本地执行，不能重复应用。
+    if !op.applied_locally {
+        crate::sync::queue::push(op.clone());
+    }
 
     // 广播给所有成员
     broadcast(members, None, &Message::OpApply { seq, op });

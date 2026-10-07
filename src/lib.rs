@@ -13,7 +13,7 @@ use reaper_high::{ActionKind, Reaper};
 use crate::network::client::join_room;
 use crate::network::discovery::{local_ip, start_broadcast, start_discovery, RoomInfo};
 use crate::network::server::{host_submit_op, start_server, GlobalLog, MemberTable};
-use crate::sync::hook::CoopHook;
+use crate::sync::hook::{CoopHook, CoopPostHook};
 
 extern "C" fn coop_sync_timer() {
     let ops = crate::sync::queue::drain();
@@ -31,12 +31,24 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
     let reaper = Reaper::get();
     reaper.wake_up()?;
 
+    if let Err(error) = crate::network::initialize() {
+        reaper.show_console_msg(format!(
+            "协作网络初始化失败：{}\n请检查端口占用、防火墙和网络权限。\n",
+            error
+        ));
+    } else {
+        reaper.show_console_msg("协作网络初始化完成\n");
+    }
+
     // ---------- 注册普通 Action hook ----------
     {
         let mut session = reaper.medium_session();
         session
             .plugin_register_add_hook_command::<CoopHook>()
             .map_err(|e| format!("注册 hookcommand 失败: {:?}", e))?;
+        session
+            .plugin_register_add_hook_post_command::<CoopPostHook>()
+            .map_err(|e| format!("注册 hookpostcommand 失败: {:?}", e))?;
         session
             .plugin_register_add_timer(coop_sync_timer)
             .map_err(|e| format!("注册同步定时器失败: {:?}", e))?;
@@ -231,7 +243,11 @@ fn plugin_main() -> Result<(), Box<dyn Error>> {
                 id: 0,
                 seq: 0,
                 author: 0,
-                kind: crate::protocol::OpKind::TrackAdd { index: -1 },
+                applied_locally: false,
+                kind: crate::protocol::OpKind::TrackAdd {
+                    index: -1,
+                    chunks: vec![],
+                },
                 undo_data: vec![],
             };
             crate::sync::send_op(op);

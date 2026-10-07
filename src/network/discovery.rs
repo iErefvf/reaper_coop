@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-pub const DISCOVERY_PORT: u16 = 22222;
+pub const DISCOVERY_PORT: u16 = 38080;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RoomInfo {

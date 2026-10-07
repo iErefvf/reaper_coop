@@ -45,13 +45,14 @@ pub struct Operation {
     pub id: u64,
     pub seq: u64,
     pub author: u64,
+    pub applied_locally: bool,
     pub kind: OpKind,
     pub undo_data: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OpKind {
-    TrackAdd { index: i32 },
+    TrackAdd { index: i32, chunks: Vec<String> },
     TrackDelete { track_guid: String },
 }
 

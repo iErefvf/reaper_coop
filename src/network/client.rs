@@ -56,7 +56,9 @@ pub fn join_room(host_ip: &str, name: &str) -> Result<ClientConnection, String> 
                     "成员收到 OpApply: seq={}, kind={:?}",
                     seq, op.kind
                 ));
-                crate::sync::queue::push(op);
+                if !(op.applied_locally && op.author == member_id) {
+                    crate::sync::queue::push(op);
+                }
             }
             Ok(msg) => {
                 crate::network::push_log(format!("收到房主消息: {:?}", msg));
